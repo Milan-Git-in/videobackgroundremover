@@ -491,14 +491,6 @@ async function init() {
     vertexShader,
     fragmentShader,
     transparent: true,
-    // V8: Straight (non-premultiplied) alpha blending
-    // Prevents weak alpha regions from being multiplied to zero by WebGL blending
-    premultipliedAlpha: false,
-    blending: THREE.CustomBlending,
-    blendSrc: THREE.SrcAlphaFactor,
-    blendDst: THREE.OneMinusSrcAlphaFactor,
-    blendSrcAlpha: THREE.OneFactor,
-    blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
   });
 
   plane = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);

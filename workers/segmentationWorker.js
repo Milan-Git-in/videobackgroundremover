@@ -1,89 +1,39 @@
 /**
- * V9 Segmentation Worker
- * GPU → CPU → graceful fallback pipeline.
- * - Explicit publicPath for CDN WASM/model loading (fixes broken CPU in Arc/non-WebGPU)
- * - 45s warmup timeout (never gets stuck)
- * - Always sends 'ready' or 'error' — no silent hangs
- * - V8 post-processing: alpha boost + dilation + interior fill
+ * V8 Segmentation Worker
+ * GPU-accelerated background removal with:
+ * - Mask coverage validation (V6)
+ * - Alpha confidence reinforcement (V8): boost + dilation + interior fill
  */
 
 import { removeBackground } from '@imgly/background-removal';
 
 let isReady = false;
-let useGPU = false; // Determined during warmup
-
-// The library's CDN for WASM/ONNX model files.
-// Required when local serving fails (non-WebGPU browsers, Vercel/Netlify deployments).
-const IMGLY_CDN = 'https://cdn.img.ly/packages/imgly/background-removal-js/1.7.0/dist/';
-
-// ============================================================================
-// WARMUP — try GPU, fallback CPU, always resolve within timeout
-// ============================================================================
+let useGPU = true;
 
 async function warmUp() {
-  // Hard timeout: if ONNX hangs (e.g. dxil.dll crash), still report ready
-  const timeoutMs = 45_000;
-  let settled = false;
-
-  const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('Warmup timed out after 45s')), timeoutMs)
-  );
-
   try {
-    await Promise.race([doWarmUp(), timeoutPromise]);
-  } catch (err) {
-    if (!settled) {
-      console.warn('[Worker] Warmup failed/timed out, marking as CPU-ready anyway:', err.message);
-      isReady = true;
+    const canvas = new OffscreenCanvas(8, 8);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#888';
+    ctx.fillRect(0, 0, 8, 8);
+    const blob = await canvas.convertToBlob({ type: 'image/png' });
+
+    try {
+      await removeBackground(blob, { device: 'gpu' });
+      useGPU = true;
+      console.log('[Worker] WebGPU warm-up successful');
+    } catch (gpuErr) {
+      console.warn('[Worker] WebGPU unavailable, falling back to CPU:', gpuErr.message);
       useGPU = false;
-      settled = true;
-      // Still post 'ready' so the app isn't stuck — individual frames will handle their own errors
-      self.postMessage({ type: 'ready', gpu: false });
+      await removeBackground(blob, { device: 'cpu' });
+      console.log('[Worker] CPU warm-up successful');
     }
-  }
-}
 
-async function doWarmUp() {
-  const canvas = new OffscreenCanvas(8, 8);
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#888';
-  ctx.fillRect(0, 0, 8, 8);
-  const blob = await canvas.convertToBlob({ type: 'image/png' });
-
-  // Try GPU first
-  try {
-    await removeBackground(blob, {
-      device: 'gpu',
-      publicPath: IMGLY_CDN,
-      output: { quality: 0.5 },
-    });
-    useGPU = true;
     isReady = true;
-    console.log('[Worker] WebGPU warm-up successful');
-    self.postMessage({ type: 'ready', gpu: true });
-    return;
-  } catch (gpuErr) {
-    console.warn('[Worker] WebGPU unavailable, trying CPU:', gpuErr.message.substring(0, 120));
-  }
-
-  // Try CPU with explicit CDN publicPath (critical for Arc/non-WebGPU)
-  try {
-    await removeBackground(blob, {
-      device: 'cpu',
-      publicPath: IMGLY_CDN,
-      output: { quality: 0.5 },
-    });
-    useGPU = false;
-    isReady = true;
-    console.log('[Worker] CPU warm-up successful');
-    self.postMessage({ type: 'ready', gpu: false });
-    return;
-  } catch (cpuErr) {
-    console.warn('[Worker] CPU also failed:', cpuErr.message.substring(0, 120));
-    // Don't throw — fall through so the timeout handler posts 'ready' anyway
-    isReady = true;
-    useGPU = false;
-    self.postMessage({ type: 'ready', gpu: false });
+    self.postMessage({ type: 'ready', gpu: useGPU });
+  } catch (err) {
+    console.error('[Worker] Warm-up failed:', err);
+    self.postMessage({ type: 'error', message: 'Worker warm-up failed: ' + err.message });
   }
 }
 
@@ -91,25 +41,38 @@ async function doWarmUp() {
 // V8: POST-PROCESSING PIPELINE
 // ============================================================================
 
+/**
+ * Step 1: Alpha Boost
+ * Nonlinear curve lifts weak interior values without blowing out edges.
+ * Uses a blended pow curve:  alpha = pow(alpha, 0.55)
+ * Pixels with alpha > 0 are boosted; alpha == 0 stays 0 (true background).
+ */
 function boostAlpha(alpha) {
   const boosted = new Uint8Array(alpha.length);
   for (let i = 0; i < alpha.length; i++) {
     if (alpha[i] === 0) {
-      boosted[i] = 0;
+      boosted[i] = 0; // True background — never boost
     } else {
+      // Normalize to [0,1], apply power curve, re-normalize to [0,255]
       const norm = alpha[i] / 255;
-      const lifted = Math.pow(norm, 0.55);
+      const lifted = Math.pow(norm, 0.55); // Boosts mid-low values, preserves peaks
       boosted[i] = Math.min(255, Math.round(lifted * 255));
     }
   }
   return boosted;
 }
 
+/**
+ * Step 2: Morphological Dilation (1px radius)
+ * Expands the mask outward by 1 pixel, filling small gaps and holes at subject boundary.
+ * Uses a 3x3 max-filter kernel.
+ */
 function dilate(alpha, w, h) {
   const result = new Uint8Array(alpha.length);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       let maxVal = 0;
+      // 3x3 neighborhood max
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
           const ny = y + dy;
@@ -126,23 +89,38 @@ function dilate(alpha, w, h) {
   return result;
 }
 
+/**
+ * Step 3: Context-Aware Interior Fill
+ * For each pixel where alpha < HIGH_THRESHOLD:
+ *   Sample its 5x5 neighborhood.
+ *   If the average of neighbors is > SURROUND_THRESHOLD, pull the pixel toward that value.
+ * This rescues isolated low-confidence interior pixels surrounded by confident foreground.
+ *
+ * NOTE: Only strengthens interior pixels — never assigns foreground to true background (alpha==0).
+ */
 function fillInterior(alpha, w, h) {
-  const HIGH_THRESHOLD = 200;
-  const SURROUND_THRESHOLD = 80;
-  const FILL_RADIUS = 2;
-  const MIN_NEIGHBOR_FRAC = 0.4;
-  const result = new Uint8Array(alpha);
+  const HIGH_THRESHOLD = 200;   // Pixels below this can be a candidate for boosting
+  const SURROUND_THRESHOLD = 80; // If neighborhood avg > this, boost the center pixel
+  const FILL_RADIUS = 2;         // 5x5 kernel (radius 2)
+  const MIN_NEIGHBOR_FRAC = 0.4; // At least 40% of neighbors must be high-alpha
+
+  const result = new Uint8Array(alpha); // copy
 
   for (let y = FILL_RADIUS; y < h - FILL_RADIUS; y++) {
     for (let x = FILL_RADIUS; x < w - FILL_RADIUS; x++) {
       const idx = y * w + x;
       const center = alpha[idx];
+
+      // Skip if already high confidence or true background
       if (center >= HIGH_THRESHOLD || center === 0) continue;
 
-      let sum = 0, highCount = 0, totalCount = 0;
+      // Sample neighborhood
+      let sum = 0;
+      let highCount = 0;
+      let totalCount = 0;
       for (let dy = -FILL_RADIUS; dy <= FILL_RADIUS; dy++) {
         for (let dx = -FILL_RADIUS; dx <= FILL_RADIUS; dx++) {
-          if (dy === 0 && dx === 0) continue;
+          if (dy === 0 && dx === 0) continue; // Exclude self
           const nv = alpha[(y + dy) * w + (x + dx)];
           sum += nv;
           if (nv > SURROUND_THRESHOLD) highCount++;
@@ -152,11 +130,16 @@ function fillInterior(alpha, w, h) {
 
       const avgNeighbor = sum / totalCount;
       const highFrac = highCount / totalCount;
+
+      // If surrounded by confident foreground, pull center toward neighborhood avg
       if (avgNeighbor > SURROUND_THRESHOLD && highFrac >= MIN_NEIGHBOR_FRAC) {
-        result[idx] = Math.min(255, Math.round(center + (avgNeighbor - center) * 0.6));
+        // Blend: move center 60% toward neighborhood average
+        const blended = center + (avgNeighbor - center) * 0.6;
+        result[idx] = Math.min(255, Math.round(blended));
       }
     }
   }
+
   return result;
 }
 
@@ -170,13 +153,13 @@ async function processFrame(frameData) {
   try {
     const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext('2d');
-    ctx.putImageData(new ImageData(new Uint8ClampedArray(imageData), width, height), 0, 0);
+    const imgData = new ImageData(new Uint8ClampedArray(imageData), width, height);
+    ctx.putImageData(imgData, 0, 0);
 
     const blob = await canvas.convertToBlob({ type: 'image/png' });
 
     const resultBlob = await removeBackground(blob, {
       device: useGPU ? 'gpu' : 'cpu',
-      publicPath: IMGLY_CDN,
     });
 
     const resultBitmap = await createImageBitmap(resultBlob);
@@ -191,32 +174,62 @@ async function processFrame(frameData) {
     const maskH = resultCanvas.height;
     const totalPixels = maskW * maskH;
 
+    // Extract raw alpha from model output
     let rawAlpha = new Uint8Array(totalPixels);
-    for (let i = 0; i < totalPixels; i++) rawAlpha[i] = pixels[i * 4 + 3];
-
-    let processedAlpha = boostAlpha(rawAlpha);
-    processedAlpha = dilate(processedAlpha, maskW, maskH);
-    processedAlpha = fillInterior(processedAlpha, maskW, maskH);
-
-    let nonZeroCount = 0, alphaSum = 0;
     for (let i = 0; i < totalPixels; i++) {
-      if (processedAlpha[i] > 10) nonZeroCount++;
-      alphaSum += processedAlpha[i];
+      rawAlpha[i] = pixels[i * 4 + 3];
+    }
+
+    // ---- V8: POST-PROCESSING PIPELINE ----
+    // Step 1: Boost weak interior alpha values
+    let processedAlpha = boostAlpha(rawAlpha);
+
+    // Step 2: Dilate to close small boundary gaps (1px)
+    processedAlpha = dilate(processedAlpha, maskW, maskH);
+
+    // Step 3: Context-aware interior fill (rescues isolated weak pixels)
+    processedAlpha = fillInterior(processedAlpha, maskW, maskH);
+    // ----------------------------------------
+
+    // Coverage metric (on final processed alpha)
+    let nonZeroCount = 0;
+    let alphaSum = 0;
+    for (let i = 0; i < totalPixels; i++) {
+      const a = processedAlpha[i];
+      if (a > 10) nonZeroCount++;
+      alphaSum += a;
     }
     const coverage = nonZeroCount / totalPixels;
     const avgAlpha = alphaSum / totalPixels;
 
     if (coverage < 0.01) {
-      console.warn(`[Worker] Frame ${frameIndex}: near-empty mask (${(coverage * 100).toFixed(1)}%)`);
+      console.warn(`[Worker] Frame ${frameIndex}: near-empty mask (coverage=${(coverage * 100).toFixed(1)}%)`);
     }
 
     self.postMessage(
-      { type: 'result', frameIndex, alpha: processedAlpha.buffer, maskWidth: maskW, maskHeight: maskH, coverage, avgAlpha },
+      {
+        type: 'result',
+        frameIndex,
+        alpha: processedAlpha.buffer,
+        maskWidth: maskW,
+        maskHeight: maskH,
+        coverage,
+        avgAlpha,
+      },
       [processedAlpha.buffer]
     );
   } catch (err) {
-    console.error(`[Worker] Frame ${frameIndex} failed:`, err.message);
-    self.postMessage({ type: 'result', frameIndex, alpha: null, maskWidth: 0, maskHeight: 0, coverage: 0, avgAlpha: 0, error: err.message });
+    console.error(`[Worker] Frame ${frameIndex} failed:`, err);
+    self.postMessage({
+      type: 'result',
+      frameIndex,
+      alpha: null,
+      maskWidth: 0,
+      maskHeight: 0,
+      coverage: 0,
+      avgAlpha: 0,
+      error: err.message,
+    });
   }
 }
 
@@ -225,6 +238,7 @@ self.onmessage = async (e) => {
   if (type === 'init') {
     warmUp();
   } else if (type === 'process') {
+    if (!isReady) console.warn('[Worker] Received frame before ready, processing anyway...');
     await processFrame(e.data);
   }
 };
