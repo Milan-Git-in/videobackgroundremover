@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Free Background Remover – Remove Image &amp; Video Background Online (No Login)</title>
+    <meta name="description" content="Remove backgrounds from images and videos instantly using AI. 100% free, no signup, no watermark. Works directly in your browser with GPU acceleration.">
+    <meta name="keywords" content="background remover, remove background free, video background remover, AI background removal, no login background remover, free background eraser, remove bg online">
+    <meta name="robots" content="index, follow">
+    <meta property="og:title" content="Free AI Background Remover – No Login Required">
+    <meta property="og:description" content="Remove backgrounds from images and videos instantly. 100% free, no signup, runs locally in your browser.">
+    <meta property="og:type" content="website">
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- V9: GPU Initialization Gate Overlay -->
+    <div id="init-gate" class="init-gate">
+        <div class="init-card">
+            <div class="init-spinner"></div>
+            <h2 id="init-title">Initializing AI Engine</h2>
+            <p id="init-status">Loading GPU acceleration...</p>
+            <div class="init-trust">🔒 Everything runs locally — no uploads to any server</div>
+        </div>
+    </div>
+
+    <div id="app" class="app-locked">
+        <aside class="sidebar glass">
+            <header>
+                <div class="header-row">
+                    <div>
+                        <div class="brand-name">Micro<span>.</span>bgremover</div>
+                        <p>AI Segmentation Studio</p>
+                    </div>
+                    <span id="gpu-badge" class="gpu-badge">⏳ Init</span>
+                </div>
+            </header>
+
+            <div class="scroll-area">
+                <!-- SECTION: SOURCE -->
+                <section class="control-section">
+                    <h2 class="section-title">Step 1: Source</h2>
+                    <div class="control-group">
+                        <label for="video-upload" class="upload-btn">
+                            <span>Upload Input (Video/Media)</span>
+                            <input type="file" id="video-upload" accept="video/*,image/*" disabled>
+                        </label>
+                        <button id="load-sample" class="btn tertiary" disabled>Use Sample Video</button>
+                    </div>
+                </section>
+
+                <div class="divider"></div>
+
+                <!-- SECTION: BACKGROUND -->
+                <section class="control-section">
+                    <h2 class="section-title">Step 2: Background</h2>
+                    <div class="background-options" style="display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px;">
+                        <label class="bg-option">
+                            <input type="radio" name="bg-type" value="transparent" checked>
+                            <span>Transparent</span>
+                        </label>
+                        <label class="bg-option">
+                            <input type="radio" name="bg-type" value="color">
+                            <span>Color</span>
+                        </label>
+                        <label class="bg-option">
+                            <input type="radio" name="bg-type" value="image">
+                            <span>Image</span>
+                        </label>
+                        <label class="bg-option">
+                            <input type="radio" name="bg-type" value="video">
+                            <span>Video</span>
+                        </label>
+                        <label class="bg-option">
+                            <input type="radio" name="bg-type" value="original">
+                            <span>Original</span>
+                        </label>
+                    </div>
+                    
+                    <div id="bg-color-picker" class="control-group" style="display: none;">
+                        <input type="color" id="bg-color" value="#00ff00" style="width: 100%; height: 40px; border: none; border-radius: 8px; cursor: pointer;">
+                    </div>
+                    
+                    <div id="bg-image-picker" class="control-group" style="display: none;">
+                        <label for="bg-image-upload" class="upload-btn" style="padding: 0.5rem; font-size: 0.9em;">
+                            <span id="bg-image-label">Upload Image/Video</span>
+                            <input type="file" id="bg-image-upload" accept="image/*,video/webm,video/mp4">
+                        </label>
+                    </div>
+                </section>
+
+                <div class="divider"></div>
+
+                <!-- SECTION: REFINE -->
+                <section class="control-section">
+                    <h2 class="section-title">Step 3: Refine</h2>
+
+                    <div class="brush-tools">
+                        <div class="toggle-row">
+                            <label class="switch">
+                                <input type="checkbox" id="brush-toggle">
+                                <span class="slider round"></span>
+                            </label>
+                            <span>Enable Restore Brush</span>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label class="label-with-val">
+                                <span>Brush Size</span>
+                                <span id="brush-size-value">20px</span>
+                            </label>
+                            <input type="range" id="brush-size" min="5" max="100" step="1" value="20">
+                        </div>
+
+                        <div class="mask-preview-toggle">
+                            <label class="toggle-row">
+                                <input type="checkbox" id="mask-preview">
+                                <span>Show Mask Preview</span>
+                            </label>
+                        </div>
+
+                        <div class="toggle-row">
+                            <label class="switch">
+                                <input type="checkbox" id="debug-toggle">
+                                <span class="slider round"></span>
+                            </label>
+                            <span>Debug Overlay</span>
+                        </div>
+                        
+                        <button id="clear-mask" class="btn tertiary small">Clear All Brush Strokes</button>
+                    </div>
+                </section>
+
+                <div class="divider"></div>
+
+                <!-- SECTION: EXPORT -->
+                <section class="control-section">
+                    <h2 class="section-title">Step 4: Export</h2>
+                    
+                    <div class="toggle-row">
+                        <label class="switch">
+                            <input type="checkbox" id="bg-toggle">
+                            <span class="slider round"></span>
+                        </label>
+                        <span>Checkerboard BG (Proof)</span>
+                    </div>
+
+                    <div class="render-progress" id="render-progress" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-fill"></div>
+                        </div>
+                        <span id="progress-text">Rendering: 0%</span>
+                    </div>
+
+                    <div class="action-btns">
+                        <button id="play-pause" class="btn secondary">Play / Pause</button>
+                        <button id="download" class="btn primary">Render Final Video</button>
+                    </div>
+                </section>
+
+                <!-- V9: Trust Signals -->
+                <div class="trust-signals">
+                    <div class="trust-item">🔒 No uploads. Runs locally in your browser.</div>
+                    <div class="trust-item">⚡ GPU-accelerated via WebGPU.</div>
+                    <div class="trust-item">✅ Free. No account. No watermark.</div>
+                </div>
+            </div>
+
+            <footer class="status-panel">
+                <div id="status-icon" class="ready"></div>
+                <p id="status">System Ready</p>
+            </footer>
+        </aside>
+
+        <main class="viewport">
+            <div id="canvas-container"></div>
+
+            <!-- V9: Landing Headline (visible before media is loaded) -->
+            <div id="landing-hero" class="landing-hero">
+                <h1 class="landing-h1">Free AI Background Remover</h1>
+                <p class="landing-sub">No login. No watermark. No uploads to any server.</p>
+                <div class="landing-badges">
+                    <span class="badge">100% Free</span>
+                    <span class="badge">GPU Accelerated</span>
+                    <span class="badge">Privacy First</span>
+                    <span class="badge">Images &amp; Videos</span>
+                </div>
+                <p class="landing-hint">Upload a video or image to get started →</p>
+            </div>
+
+            <div id="toast-container"></div>
+            
+            <!-- V6: Debug Panel -->
+            <div id="debug-panel" class="debug-panel" style="display: none;"></div>
+            
+            <!-- Processing Overlay -->
+            <div id="processing-overlay" style="display:none;">
+                <div class="processing-card">
+                    <div class="processing-spinner"></div>
+                    <h2 id="processing-title">Processing...</h2>
+                    <p id="processing-status">Initializing AI Engine</p>
+                    <div class="processing-progress-bar">
+                        <div class="processing-progress-fill" id="processing-fill"></div>
+                    </div>
+                    <p id="processing-percent">0%</p>
+                    
+                    <!-- Stats Grid -->
+                    <div class="processing-stats">
+                        <div class="stat-item">
+                            <span class="stat-label">ETA</span>
+                            <span class="stat-value" id="processing-eta">--</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Speed</span>
+                            <span class="stat-value" id="processing-speed">0 fps</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Workers</span>
+                            <span class="stat-value" id="processing-workers">4 workers</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Engine</span>
+                            <span class="stat-value" id="processing-gpu">Detecting...</span>
+                        </div>
+                    </div>
+
+                    <div id="fast-mode-indicator" class="fast-mode" style="display: none;">
+                        ⚡ Fast Mode Active — Reduced resolution for speed
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script type="module" src="/main.js"></script>
+</body>
+</html>
