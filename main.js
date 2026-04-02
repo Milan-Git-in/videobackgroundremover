@@ -133,14 +133,22 @@ let customBgVideo = null;
 function initWorkerPool() {
   console.log(`[V8 Engine] Initializing ${WORKER_COUNT} segmentation workers...`);
 
-  // Check WebGPU support early
-  const hasWebGPU = typeof navigator !== 'undefined' && 'gpu' in navigator;
-  if (!hasWebGPU) {
-    showInitError(
-      'WebGPU is not supported in your browser.',
-      'For best performance, use the latest Chrome or Edge.'
-    );
-    return;
+  // Update init gate status live
+  const initStatus = document.getElementById('init-status');
+
+  let workersResponded = 0; // Count ready + error responses
+
+  function onWorkerResponded() {
+    workersResponded++;
+    if (initStatus) {
+      initStatus.textContent = `Worker ${workersResponded}/${WORKER_COUNT} initialized...`;
+    }
+    if (workersResponded >= WORKER_COUNT) {
+      updateGPUBadge();
+      const mode = gpuAvailable ? 'WebGPU' : 'CPU (WASM)';
+      console.log(`[V8 Engine] All workers responded. Mode: ${mode}. GPU: ${gpuAvailable}`);
+      setSystemReady();
+    }
   }
 
   for (let i = 0; i < WORKER_COUNT; i++) {
@@ -154,39 +162,23 @@ function initWorkerPool() {
         workersReady++;
         if (e.data.gpu) gpuAvailable = true;
         console.log(`[V8 Engine] Worker ${i} ready (GPU: ${e.data.gpu}). ${workersReady}/${WORKER_COUNT} online.`);
-        
-        if (workersReady === WORKER_COUNT) {
-          updateGPUBadge();
-          console.log(`[V8 Engine] All workers online. GPU: ${gpuAvailable}`);
-          setSystemReady();
-        }
+        onWorkerResponded();
       } else if (e.data.type === 'error') {
-        workerInitFailed++;
-        console.error(`[V8 Engine] Worker ${i} init error:`, e.data.message);
-        if (workerInitFailed >= WORKER_COUNT) {
-          showInitError(
-            'Failed to initialize GPU acceleration.',
-            'Please reload the page.'
-          );
-        }
+        console.warn(`[V8 Engine] Worker ${i} reported error (will use degraded mode):`, e.data.message);
+        onWorkerResponded();
       }
     };
 
     worker.onerror = (err) => {
-      workerInitFailed++;
-      console.error(`[V8 Engine] Worker ${i} crashed:`, err);
-      if (workerInitFailed >= WORKER_COUNT) {
-        showInitError(
-          'Failed to initialize GPU acceleration.',
-          'Please reload the page.'
-        );
-      }
+      console.warn(`[V8 Engine] Worker ${i} crashed, counting as responded:`, err.message);
+      onWorkerResponded();
     };
 
     worker.postMessage({ type: 'init' });
     workers.push(worker);
   }
 }
+
 
 function updateGPUBadge() {
   if (gpuBadge) {
