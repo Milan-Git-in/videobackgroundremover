@@ -261,6 +261,134 @@ body {
   color: var(--warning-yellow);
 }
 
+/* V10: Reverse Brush Tool */
+.brush-mode-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-left: 1rem;
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  display: none; /* hidden until brush toggled */
+}
+
+.brush-tools:has(#brush-toggle:checked) .brush-mode-controls {
+  display: flex;
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.radio-label:hover {
+  color: var(--text);
+}
+
+.radio-label input[type="radio"] {
+  display: none;
+}
+
+.radio-text small {
+  opacity: 0.5;
+  margin-left: 4px;
+}
+
+/* Custom radio button appearance */
+.radio-custom {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  position: relative;
+  transition: all 0.2s;
+}
+
+.radio-label input[type="radio"]:checked + .radio-custom.restore-mode {
+  border-color: #00ff88;
+  box-shadow: 0 0 8px rgba(0, 255, 136, 0.4);
+}
+
+.radio-label input[type="radio"]:checked + .radio-custom.restore-mode::after {
+  content: '';
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 6px; height: 6px;
+  background: #00ff88;
+  border-radius: 50%;
+}
+
+.radio-label input[type="radio"]:checked + .radio-custom.erase-mode {
+  border-color: #ff1e1e;
+  box-shadow: 0 0 8px rgba(255, 30, 30, 0.4);
+}
+
+.radio-label input[type="radio"]:checked + .radio-custom.erase-mode::after {
+  content: '';
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 6px; height: 6px;
+  background: #ff1e1e;
+  border-radius: 50%;
+}
+
+.radio-label input[type="radio"]:checked ~ .radio-text {
+  color: #fff;
+  font-weight: 500;
+}
+
+/* Custom Cursor */
+.brush-cursor {
+  position: fixed;
+  pointer-events: none;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  transform: translate(-50%, -50%);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 4px rgba(0,0,0,0.5), inset 0 0 2px rgba(0,0,0,0.3);
+  transition: background 0.15s ease;
+  will-change: width, height, left, top;
+}
+
+.brush-cursor.restore-mode {
+  border-color: #00ff88;
+  background: rgba(0, 255, 136, 0.1);
+}
+
+.brush-cursor.erase-mode {
+  border-color: #ff1e1e;
+  background: rgba(255, 30, 30, 0.1);
+}
+
+.brush-cursor-center {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: white;
+}
+
+.brush-cursor.restore-mode .brush-cursor-center {
+  background: #00ff88;
+  box-shadow: 0 0 4px rgba(0, 255, 136, 0.8);
+}
+
+.brush-cursor.erase-mode .brush-cursor-center {
+  background: #ff1e1e;
+  box-shadow: 0 0 4px rgba(255, 30, 30, 0.8);
+}
+
+#canvas-container.brushing canvas {
+  cursor: none !important;
+}
+
 @keyframes gpuPulse {
   0%, 100% { box-shadow: 0 0 12px rgba(0, 255, 136, 0.15); }
   50% { box-shadow: 0 0 20px rgba(0, 255, 136, 0.3); }

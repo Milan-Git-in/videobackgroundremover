@@ -18,7 +18,8 @@ const vertexShader = `
 const fragmentShader = `
     uniform sampler2D uTexture;
     uniform sampler2D uMask;
-    uniform sampler2D uUserMask;
+    uniform sampler2D uRestoreMask;
+    uniform sampler2D uEraseMask;
     uniform bool uShowMask;
     uniform bool uOriginalBg;
     varying vec2 vUv;
@@ -32,7 +33,8 @@ const fragmentShader = `
         }
 
         float rawMaskAlpha = texture2D(uMask, vUv).a;
-        float userAlpha = texture2D(uUserMask, vUv).r;
+        float userAdd = texture2D(uRestoreMask, vUv).r;
+        float userSub = texture2D(uEraseMask, vUv).r;
 
         // V8: Preserve weak interior regions — do NOT binarize or discard low alpha.
         // True-zero background stays zero. Any non-zero value is treated as foreground.
@@ -41,7 +43,7 @@ const fragmentShader = `
             ? smoothstep(0.05, 1.0, rawMaskAlpha)  // Lift weak values, preserve full interior
             : 0.0;                                   // True background — keep transparent
 
-        float alpha = max(maskAlpha, userAlpha);
+        float alpha = clamp(maskAlpha + userAdd - userSub, 0.0, 1.0);
         
         if (uShowMask) {
             if (alpha > 0.3) gl_FragColor = vec4(1.0, 0.0, 0.0, 0.8);
@@ -57,7 +59,13 @@ const fragmentShader = `
 let scene, camera, renderer, plane, material, bgMesh;
 let video, videoTexture;
 let isVideo = false;
-let maskCanvas, maskCtx, userMaskTexture;
+let restoreCanvas, restoreCtx, restoreMaskTexture;
+let eraseCanvas, eraseCtx, eraseMaskTexture;
+let brushCursorEl;
+let brushModeRadios;
+let brushSoftnessInput, brushStrengthInput;
+let currentBrushMode = 'restore';
+let isBrushAltPressed = false;
 let isRendering = false;
 let mediaRecorder;
 let recordedChunks = [];
@@ -92,6 +100,10 @@ const container = document.getElementById('canvas-container');
 const videoInput = document.getElementById('video-upload');
 const brushToggle = document.getElementById('brush-toggle');
 const brushSizeInput = document.getElementById('brush-size');
+brushSoftnessInput = document.getElementById('brush-softness');
+brushStrengthInput = document.getElementById('brush-strength');
+brushCursorEl = document.getElementById('brush-cursor');
+brushModeRadios = document.getElementsByName('brush-mode');
 const maskPreviewToggle = document.getElementById('mask-preview');
 const bgToggle = document.getElementById('bg-toggle');
 const clearMaskBtn = document.getElementById('clear-mask');
@@ -468,12 +480,18 @@ async function init() {
   bgMesh.position.z = -1;
   scene.add(bgMesh);
 
-  // User Mask Canvas (for brush restore tool)
-  maskCanvas = document.createElement('canvas');
-  maskCanvas.width = 1024; maskCanvas.height = 1024;
-  maskCtx = maskCanvas.getContext('2d');
-  maskCtx.fillStyle = 'black'; maskCtx.fillRect(0, 0, 1024, 1024);
-  userMaskTexture = new THREE.CanvasTexture(maskCanvas);
+  // V10: Dual User Mask Canvases (For Restore and Erase tools)
+  restoreCanvas = document.createElement('canvas');
+  restoreCanvas.width = 1024; restoreCanvas.height = 1024;
+  restoreCtx = restoreCanvas.getContext('2d');
+  restoreCtx.fillStyle = 'black'; restoreCtx.fillRect(0, 0, 1024, 1024);
+  restoreMaskTexture = new THREE.CanvasTexture(restoreCanvas);
+
+  eraseCanvas = document.createElement('canvas');
+  eraseCanvas.width = 1024; eraseCanvas.height = 1024;
+  eraseCtx = eraseCanvas.getContext('2d');
+  eraseCtx.fillStyle = 'black'; eraseCtx.fillRect(0, 0, 1024, 1024);
+  eraseMaskTexture = new THREE.CanvasTexture(eraseCanvas);
 
   // Initial dummy mask
   const dummyMaskCanvas = document.createElement('canvas');
@@ -484,7 +502,8 @@ async function init() {
     uniforms: {
       uTexture: { value: new THREE.Texture() },
       uMask: { value: currentMaskTexture },
-      uUserMask: { value: userMaskTexture },
+      uRestoreMask: { value: restoreMaskTexture },
+      uEraseMask: { value: eraseMaskTexture },
       uShowMask: { value: false },
       uOriginalBg: { value: false }
     },
@@ -545,8 +564,67 @@ function setupListeners() {
     }
   });
 
+  function updateCursorSize() {
+    const size = parseInt(brushSizeInput.value) * 2; // diameter roughly matches radius logic
+    brushCursorEl.style.width = `${size}px`;
+    brushCursorEl.style.height = `${size}px`;
+  }
+
+  function updateBrushModeUI() {
+    const effectiveMode = isBrushAltPressed ? 'erase' : currentBrushMode;
+    if (effectiveMode === 'erase') {
+        brushCursorEl.classList.remove('restore-mode');
+        brushCursorEl.classList.add('erase-mode');
+    } else {
+        brushCursorEl.classList.remove('erase-mode');
+        brushCursorEl.classList.add('restore-mode');
+    }
+  }
+
+  brushToggle.addEventListener('change', () => {
+    if (brushToggle.checked) {
+      container.classList.add('brushing');
+      brushCursorEl.style.display = 'flex';
+      updateCursorSize();
+      updateBrushModeUI();
+    } else {
+      container.classList.remove('brushing');
+      brushCursorEl.style.display = 'none';
+    }
+  });
+
+  brushModeRadios.forEach(radio => {
+    radio.addEventListener('change', (e) => {
+      currentBrushMode = e.target.value;
+      updateBrushModeUI();
+    });
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Alt') {
+      isBrushAltPressed = true;
+      e.preventDefault();
+      updateBrushModeUI();
+    }
+  });
+
+  document.addEventListener('keyup', (e) => {
+    if (e.key === 'Alt') {
+      isBrushAltPressed = false;
+      updateBrushModeUI();
+    }
+  });
+
+  // Keep cursor size up to date
   brushSizeInput.addEventListener('input', () => {
     document.getElementById('brush-size-value').textContent = `${brushSizeInput.value}px`;
+    updateCursorSize();
+  });
+  brushSoftnessInput.addEventListener('input', () => {
+    document.getElementById('brush-softness-value').textContent = `${brushSoftnessInput.value}%`;
+  });
+  brushStrengthInput.addEventListener('input', () => {
+    document.getElementById('brush-strength-value').textContent = `${brushStrengthInput.value}%`;
   });
 
   maskPreviewToggle.addEventListener('change', () => material.uniforms.uShowMask.value = maskPreviewToggle.checked);
@@ -581,7 +659,16 @@ function setupListeners() {
     hideLandingHero();
     loadAndProcessVideo('/eyes.webm');
   });
-  clearMaskBtn.addEventListener('click', clearMask);
+  
+  clearMaskBtn.addEventListener('click', () => {
+    restoreCtx.fillStyle = 'black';
+    restoreCtx.fillRect(0, 0, 1024, 1024);
+    restoreMaskTexture.needsUpdate = true;
+
+    eraseCtx.fillStyle = 'black';
+    eraseCtx.fillRect(0, 0, 1024, 1024);
+    eraseMaskTexture.needsUpdate = true;
+  });
 
   // V6: Debug toggle
   if (debugToggle) {
@@ -594,27 +681,69 @@ function setupListeners() {
 
   // Canvas Brush Listeners
   const onMove = (e) => {
-    if (!brushToggle.checked || (e.buttons !== 1 && e.type !== 'touchstart')) return;
-    const rect = renderer.domElement.getBoundingClientRect();
+    if (!brushToggle.checked) return;
+
+    // Track cursor visuals bounds check
     const clientX = e.clientX || (e.touches && e.touches[0].clientX);
     const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+    brushCursorEl.style.left = `${clientX}px`;
+    brushCursorEl.style.top = `${clientY}px`;
+
+    // Only draw if actively clicking/touching
+    if (e.buttons !== 1 && e.type !== 'touchstart' && e.type !== 'touchmove') return;
+
+    const rect = renderer.domElement.getBoundingClientRect();
     const x = ((clientX - rect.left) / rect.width) * 2 - 1;
     const y = -((clientY - rect.top) / rect.height) * 2 + 1;
 
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
     const intersects = raycaster.intersectObject(plane);
+    
     if (intersects.length > 0) {
       const uv = intersects[0].uv;
-      maskCtx.fillStyle = e.buttons === 2 || e.shiftKey ? 'black' : 'white';
-      maskCtx.beginPath();
-      maskCtx.arc(uv.x * 1024, (1 - uv.y) * 1024, parseInt(brushSizeInput.value), 0, Math.PI * 2);
-      maskCtx.fill();
-      userMaskTexture.needsUpdate = true;
+      
+      const size = parseInt(brushSizeInput.value);
+      const softness = parseInt(brushSoftnessInput.value) / 100.0;
+      const strength = parseInt(brushStrengthInput.value) / 100.0;
+      
+      const effectiveMode = isBrushAltPressed ? 'erase' : currentBrushMode;
+      const primaryCtx = effectiveMode === 'restore' ? restoreCtx : eraseCtx;
+      const secondaryCtx = effectiveMode === 'restore' ? eraseCtx : restoreCtx;
+
+      const cx = uv.x * 1024;
+      const cy = (1 - uv.y) * 1024;
+      
+      const grad = primaryCtx.createRadialGradient(cx, cy, 0, cx, cy, size);
+      const innerCore = Math.max(0, 1.0 - softness);
+      
+      grad.addColorStop(0, `rgba(255, 255, 255, ${strength})`);
+      if (innerCore < 1) grad.addColorStop(innerCore, `rgba(255, 255, 255, ${strength})`);
+      grad.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
+
+      // Add stroke to active mode buffer
+      primaryCtx.globalCompositeOperation = 'source-over';
+      primaryCtx.fillStyle = grad;
+      primaryCtx.beginPath();
+      primaryCtx.arc(cx, cy, size, 0, Math.PI * 2);
+      primaryCtx.fill();
+
+      // Erase stroke simultaneously from opposing buffer
+      secondaryCtx.globalCompositeOperation = 'destination-out';
+      secondaryCtx.fillStyle = grad;
+      secondaryCtx.beginPath();
+      secondaryCtx.arc(cx, cy, size, 0, Math.PI * 2);
+      secondaryCtx.fill();
+
+      restoreMaskTexture.needsUpdate = true;
+      eraseMaskTexture.needsUpdate = true;
     }
   };
+  
   renderer.domElement.addEventListener('mousedown', onMove);
   renderer.domElement.addEventListener('mousemove', onMove);
+  renderer.domElement.addEventListener('touchstart', onMove, {passive: true});
+  renderer.domElement.addEventListener('touchmove', onMove, {passive: true});
   renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
 }
 

@@ -103,7 +103,19 @@
                                 <input type="checkbox" id="brush-toggle">
                                 <span class="slider round"></span>
                             </label>
-                            <span>Enable Restore Brush</span>
+                            <span>Enable Manual Brush</span>
+                        </div>
+
+                        <!-- V10: Reverse Brush Controls -->
+                        <div id="brush-mode-controls" class="brush-mode-controls">
+                            <label class="radio-label" title="Add to foreground mask">
+                                <input type="radio" name="brush-mode" value="restore" checked>
+                                <span class="radio-text">Restore (+)</span>
+                            </label>
+                            <label class="radio-label" title="Remove from foreground mask">
+                                <input type="radio" name="brush-mode" value="erase">
+                                <span class="radio-text">Erase (-) <small>(Hold Alt)</small></span>
+                            </label>
                         </div>
                         
                         <div class="control-group">
@@ -111,7 +123,23 @@
                                 <span>Brush Size</span>
                                 <span id="brush-size-value">20px</span>
                             </label>
-                            <input type="range" id="brush-size" min="5" max="100" step="1" value="20">
+                            <input type="range" id="brush-size" min="5" max="200" step="1" value="20">
+                        </div>
+
+                        <div class="control-group">
+                            <label class="label-with-val">
+                                <span>Edge Softness</span>
+                                <span id="brush-softness-value">50%</span>
+                            </label>
+                            <input type="range" id="brush-softness" min="0" max="100" step="1" value="50">
+                        </div>
+
+                        <div class="control-group">
+                            <label class="label-with-val">
+                                <span>Brush Strength</span>
+                                <span id="brush-strength-value">100%</span>
+                            </label>
+                            <input type="range" id="brush-strength" min="1" max="100" step="1" value="100">
                         </div>
 
                         <div class="mask-preview-toggle">
@@ -191,6 +219,11 @@
             </div>
 
             <div id="toast-container"></div>
+            
+            <!-- V10: Brush Cursor -->
+            <div id="brush-cursor" class="brush-cursor" style="display: none;">
+                <div class="brush-cursor-center"></div>
+            </div>
             
             <!-- V6: Debug Panel -->
             <div id="debug-panel" class="debug-panel" style="display: none;"></div>
