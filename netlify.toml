@@ -1,0 +1,10 @@
+[build]
+  command   = "node ./node_modules/vite/bin/vite.js build"
+  publish   = "dist"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cross-Origin-Opener-Policy   = "same-origin"
+    Cross-Origin-Embedder-Policy = "require-corp"
+    Cross-Origin-Resource-Policy = "cross-origin"
